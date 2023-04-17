@@ -1,0 +1,146 @@
+<?xml version="1.0"?>
+
+<launch>
+
+  <!-- parameters for the husky packages e.g. for husky description -->
+  <arg name="laser_enabled" default="true"/>
+  <arg name="realsense_enabled" default="true"/>
+  <arg name="urdf_extras" default=""/>
+
+  <!-- spawning coordinates in gazebo -->
+  <arg name="x" default="7.06"/>
+  <arg name="y" default="-8.644901"/>
+  <arg name="z" default="0.192749"/>
+  <arg name="yaw" default="3.14"/>
+
+  <!-- joystick teleop speed scale -->
+  <arg name="scale_linear" default="0.5"/>
+  <arg name="scale_angular" default="0.9"/>
+
+  <!-- other parameters -->
+  <!-- <arg name="world_name" default="$(find experiments_launch)/world/mi_arena.world"/> -->
+  <arg name="world"/>
+
+  <arg name="ground_truth_topic" default="husky_base_ground_truth"/>
+
+  <arg name="gui" default="true"/>
+  <arg name="gazebo_args" default="-u"/>
+  <param name="/use_sim_time" value="true" />
+
+
+  <!-- Run the map server -->
+  <arg name="map_file" default="$(find experiments_launch)/world/first_map.yaml"/>
+  <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)"/>
+
+  <!-- launching gazebo stuff -->
+  <node name="gazebo" pkg="gazebo_ros" type="gzserver" args="$(arg gazebo_args) $(find experiments_launch)/world/$(arg world)" respawn="false" output="screen"/>
+
+  <group if="$(arg gui)">
+    <node name="gazebo_gui" pkg="gazebo_ros" type="gzclient" respawn="false" output="screen"/>
+  </group>
+
+  <include file="$(find husky_gazebo)/launch/spawn_husky.launch">
+    <arg name="laser_enabled" value="$(arg laser_enabled)"/>
+    <arg name="realsense_enabled" value="$(arg realsense_enabled)"/>
+    <arg name="urdf_extras" value="$(arg urdf_extras)"/>
+    <arg name="x" value="$(arg x)"/>
+    <arg name="y" value="$(arg y)"/>
+    <arg name="z" value="$(arg z)"/>
+    <arg name="yaw" value="$(arg yaw)"/>
+  </include>
+
+  <!-- joy node for operator's joystick input-->
+  <node respawn="true" pkg="joy" type="joy_node" name="joy_node">
+    <param name="dev" type="string" value="/dev/input/js0"/>
+    <param name="deadzone" value="0.15"/>
+  </node>
+  <!-- joy node for experimenter's joystick-->
+  <node respawn="true" pkg="joy" type="joy_node" name="joy_experimenter_node">
+    <!-- second joystick for experimenter logging -->
+    <param name="dev" type="string" value="/dev/input/js1"/>
+    <remap from="/joy" to="/joy_experimenter"/>
+  </node>
+
+  <!-- teleoperation node -->
+  <node pkg="mixed_initiative_teleop" type="mixed_initiative_teleop" name="mi_teleop" output="screen">
+    <param name="scale_linear" value="$(arg scale_linear)"/>
+    <param name="scale_angular" value="$(arg scale_angular)"/>
+  </node>
+
+  <!-- cmd mixer for choosing autonomy mode or e.g. emergency stop if nav doesnt work good. (buttons for teleoperation - stop - autonomy mode) -->
+  <!-- In xbox controller Y = teleop , A = auto , LB = stop (in any case) -->
+  <node pkg="variable_autonomy" type="control_mixer_node" name="control_mixer" output="screen">
+    <remap from="/cmd_vel" to="/husky_velocity_controller/cmd_vel"/>
+  </node>
+
+  <!--- Run AMCL -->
+  <arg name="scan_topic" default="scan_with_noise"/>
+  <include file="$(find husky_navigation)/launch/amcl.launch"> <arg name="scan_topic" value="$(arg scan_topic)"/> </include>
+  
+  <!-- Fake/perfect localization -->
+  <!-- Fake localisation needs proadcaster to connect map and odom -->
+  <!-- <node pkg="tf" type="static_transform_publisher" name="map_odom_broadcaster" args="0 0 0 0 0 0 /map /odom 100" />
+  <node pkg="fake_localization" type="fake_localization" name="fake_localization">
+    <remap from="base_pose_ground_truth" to="$(arg ground_truth_topic)"/>
+    <param name="delta_x" value="-9.08"/>
+    <param name="delta_y" value="6.95"/>
+    <param name="delta_yaw" value="3.14"/>
+  </node> -->
+
+  <!--- Run Move Base -->
+  <!-- To run without noise just launch move_base_no_noise.launch -->
+  <include file="$(find experiments_launch)/launch/move_base_noise.launch"/>
+
+  <!-- Laser noise node to add some extra noise--> 
+  <node pkg="laser_noise" type="activate_noise_joystick" name="laserEvent" output="screen"/>
+  <node respawn="true" pkg="laser_noise" type="laser_noise_node" name="lasernoise_node"/>
+    <!-- <remap from="/scan" to="/scan_filtered" />
+    <remap from="/scan_with_noise" to="/scan_final" /> -->
+  <!--   <param name="noise_period" value="30.0"/>
+  </node> -->
+
+  <!-- mode and status, logging and visualising nodes -->
+  <node pkg="status_publisher" type="status_publisher" name="status_publisher" output="screen"/>
+  <node pkg="status_publisher" type="experiment_logger" name="experiment_logger" output="screen"/>
+  <node pkg="status_publisher" type="status_sound_publisher_node" name="status_sound_publisher_node" output="screen"/>
+  <!-- RVIZ config -->
+  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find experiments_launch)/rviz_cfg/rviz_navigation_training_Health.rviz"/>
+
+  <!-- Play sounds -->
+  <node pkg="sound_play" type="soundplay_node.py" name="soundplay_node" output="screen"/>
+
+  <!-- Hector trajectory server for keeping history and visualizing of all the paths visited -->
+  <node pkg="hector_trajectory_server" type="hector_trajectory_server" name="trajectory_server" output="screen"/>
+
+<!-- Robot Vitals Stuff begins here  -->
+
+  <node name='laserScanVisualiser' pkg='rv_test' type='laserScanVisualiser'/>
+  <!-- <node name='activate_noise_joystick' pkg='laser_noise' type='activate_noise_joystick'/> -->
+  <node name='snr_estimator' pkg='rv_test' type='snr_estimator.py'/>
+
+  <!-- Preprocessing for vitals -->
+  <node name='magDist_odom_maker' pkg ='create_vitals' type = 'magDist_odom.py'/>
+  <node name='magDistFromGoal_differentiator' pkg ='create_vitals' type = 'magDist_odom_differentiator.py'/>
+  <node name='odomPosErr_differentiator' pkg='create_vitals' type = 'odomPosErr_differentiator.py'/>
+  <node name='odomMag_differentiator' pkg='create_vitals' type='velocity_from_odomMag_differentiator.py'/>
+  <node name='linAcc_z_roc_maker' pkg = 'create_vitals' type='linAcc_differentiator.py'/>
+
+
+  <!-- Creating the vitals -->
+  <node name='magROC_event_maker' pkg = 'create_vitals' type='magROC_event_detection.py'/>
+
+  <node name='velocity_event_creator' pkg = 'create_vitals' type='velocity_from_odom_event_detection.py'/>
+
+  <node name='odomPosErr_event_creator' pkg = 'create_vitals' type='odomPosErr_event_detection.py'/>
+
+  <!-- Creating the probabilities of suffering -->
+  <node name='ProbabilitOfSuffering' pkg = 'create_vitals' type = 'probabilityOfSuffering.py'/>
+
+
+  <!-- Publish suffering and health -->
+  <node name='sufferingAndHealth' pkg = 'create_vitals' type = 'healthAndSuffering.py'/>
+
+
+
+
+</launch>
